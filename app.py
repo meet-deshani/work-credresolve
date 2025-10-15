@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import itertools
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -204,6 +204,79 @@ def compute_focus_recommendations(
     ]
 
 
+def compute_combination_focus(
+    df: pd.DataFrame,
+    available_columns: Iterable[str],
+    *,
+    min_leads: int = 30,
+    max_combination_size: int = 3,
+    max_combinations: int = 250,
+) -> Tuple[pd.DataFrame, bool, int]:
+    """Summarize which parameter combinations outperform or underperform overall."""
+
+    overall_rate = df["conversion_flag"].mean()
+    combinations_evaluated = 0
+    truncated = False
+    focus_rows: List[pd.DataFrame] = []
+
+    available = list(available_columns)
+    if len(available) < 2:
+        return pd.DataFrame(), truncated, combinations_evaluated
+
+    for size in range(2, min(max_combination_size, len(available)) + 1):
+        for combo in itertools.combinations(available, size):
+            combinations_evaluated += 1
+            if combinations_evaluated > max_combinations:
+                truncated = True
+                break
+
+            summary = combination_summary(df, combo)
+            summary = summary[summary["leads"] >= min_leads]
+            if summary.empty:
+                continue
+
+            combo_label = " + ".join(combo)
+            attribute = (
+                summary[list(combo)]
+                .astype(str)
+                .agg(" | ".join, axis=1)
+            )
+
+            combo_focus = summary.assign(
+                parameter_combination=combo_label,
+                attribute=attribute,
+                combination_size=size,
+                lift_vs_overall=summary["conversion_rate"] - overall_rate,
+            )
+
+            combo_focus["focus_direction"] = combo_focus["lift_vs_overall"].apply(
+                lambda lift: "Outperforming" if lift > 0 else "Underperforming"
+            )
+
+            focus_rows.append(
+                combo_focus[
+                    [
+                        "parameter_combination",
+                        "attribute",
+                        "combination_size",
+                        "leads",
+                        "conversions",
+                        "conversion_rate",
+                        "lift_vs_overall",
+                        "focus_direction",
+                    ]
+                ]
+            )
+        if truncated:
+            break
+
+    if not focus_rows:
+        return pd.DataFrame(), truncated, combinations_evaluated
+
+    focus_df = pd.concat(focus_rows, ignore_index=True)
+    return focus_df, truncated, combinations_evaluated
+
+
 def render_single_parameter_view(df: pd.DataFrame, available_columns: List[str]) -> None:
     st.header("Single Parameter Performance")
 
@@ -276,11 +349,14 @@ def render_focus_recommendations(df: pd.DataFrame, available_columns: List[str])
     )
 
     top_n = st.slider(
-        "Show top attributes per parameter",
+        "Show top insights per group",
         min_value=1,
         max_value=10,
         value=3,
-        help="Limit the number of high- and low-performing attributes displayed for each parameter.",
+        help=(
+            "Limit the number of high- and low-performing attributes or combinations "
+            "displayed for each group."
+        ),
     )
 
     focus_df = compute_focus_recommendations(
@@ -327,6 +403,66 @@ def render_focus_recommendations(df: pd.DataFrame, available_columns: List[str])
         )
     else:
         st.info("No attributes are currently underperforming the overall conversion rate.")
+
+    st.markdown("---")
+    st.subheader("Parameter combination insights")
+
+    max_combo_size = st.slider(
+        "Maximum combination size",
+        min_value=2,
+        max_value=min(4, len(available_columns)),
+        value=min(3, len(available_columns)),
+        help="Broaden or narrow the search for multi-parameter opportunities.",
+    )
+
+    combo_focus_df, truncated, combos_evaluated = compute_combination_focus(
+        df,
+        available_columns,
+        min_leads=min_leads,
+        max_combination_size=max_combo_size,
+    )
+
+    if combos_evaluated == 0:
+        st.info("Add at least two eligible parameters to evaluate combinations.")
+        return
+
+    if combo_focus_df.empty:
+        st.info(
+            "No parameter combinations met the minimum lead threshold for analysis."
+        )
+        return
+
+    if truncated:
+        st.warning(
+            "Displayed results are truncated to keep analysis responsive. "
+            "Reduce the maximum combination size or filter columns for a complete view."
+        )
+
+    outperform_combos = (
+        combo_focus_df[combo_focus_df["lift_vs_overall"] > 0]
+        .sort_values(["combination_size", "lift_vs_overall", "conversion_rate"], ascending=[True, False, False])
+        .groupby("combination_size", group_keys=False)
+        .head(top_n)
+    )
+
+    underperform_combos = (
+        combo_focus_df[combo_focus_df["lift_vs_overall"] <= 0]
+        .sort_values(["combination_size", "lift_vs_overall", "conversion_rate"], ascending=[True, True, True])
+        .groupby("combination_size", group_keys=False)
+        .head(top_n)
+    )
+
+    if not outperform_combos.empty:
+        st.markdown("### High-performing combinations")
+        st.dataframe(outperform_combos, use_container_width=True)
+    else:
+        st.info("No parameter combinations are outperforming the overall conversion rate.")
+
+    if not underperform_combos.empty:
+        st.markdown("### Combinations needing attention")
+        st.dataframe(underperform_combos, use_container_width=True)
+    else:
+        st.info("No parameter combinations are underperforming the overall conversion rate.")
 
 
 def reset_validation_state(current_file) -> None:
