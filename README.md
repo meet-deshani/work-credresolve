@@ -9,9 +9,9 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-1. Open the **Data Upload & Validation** section and upload your CSV.
-2. Click **Validate Data** to run the sanity checks and view the automatic data health summary.
-3. Navigate with the sidebar to explore single parameters, parameter combinations, and focus recommendations that highlight high- and low-performing attributes.
+1. Upload your CSV via the sidebar.
+2. Click **Validate File** to run the data sanity checks.
+3. Use the controls on the main page to explore parameter-level performance and correlations.
 
 ## Smoke test
 
