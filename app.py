@@ -407,6 +407,12 @@ def render_focus_recommendations(df: pd.DataFrame, available_columns: List[str])
     st.markdown("---")
     st.subheader("Parameter combination insights")
 
+    if len(available_columns) < 2:
+        st.info(
+            "Add at least two eligible parameters to evaluate combination-focused insights."
+        )
+        return
+
     max_combo_size = st.slider(
         "Maximum combination size",
         min_value=2,
